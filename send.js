@@ -1,27 +1,25 @@
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { google } from 'googleapis';
+import nodemailer from 'nodemailer';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-function base64UrlEncode(value) {
-  return Buffer.from(value)
-    .toString('base64')
-    .replace(/\+/g, '-')
-    .replace(/\//g, '_')
-    .replace(/=+$/, '');
-}
-
-async function loadJsonIfExists(fileName) {
-  try {
-    const filePath = path.join(__dirname, fileName);
-    const content = await readFile(filePath, 'utf8');
-    return JSON.parse(content);
-  } catch {
-    return null;
+function parseBoolean(value, fallback = false) {
+  if (typeof value !== 'string') {
+    return fallback;
   }
+
+  const normalized = value.trim().toLowerCase();
+  if (['1', 'true', 'yes', 'on'].includes(normalized)) {
+    return true;
+  }
+  if (['0', 'false', 'no', 'off'].includes(normalized)) {
+    return false;
+  }
+
+  return fallback;
 }
 
 async function loadEnvFile() {
@@ -53,72 +51,39 @@ async function loadEnvFile() {
 async function main() {
   await loadEnvFile();
 
-  const credentials = (await loadJsonIfExists('credentials.json')) || {
-    web: {
-      client_id: process.env.GMAIL_CLIENT_ID,
-      client_secret: process.env.GMAIL_CLIENT_SECRET,
-    },
-  };
-  const token = (await loadJsonIfExists('token.json')) || {
-    refresh_token: process.env.GMAIL_REFRESH_TOKEN,
-  };
+  const smtpHost = process.env.SMTP_HOST;
+  const smtpPort = Number.parseInt(process.env.SMTP_PORT || '', 10);
+  const smtpSecure = parseBoolean(process.env.SMTP_SECURE, smtpPort === 465);
+  const smtpUser = process.env.SMTP_USER;
+  const smtpPass = process.env.SMTP_PASS;
+  const smtpFrom = process.env.SMTP_FROM;
 
-  const client = credentials.installed || credentials.web;
-
-  if (!client?.client_id || !client?.client_secret) {
-    throw new Error('Missing Gmail client credentials. Add credentials.json or set GMAIL_CLIENT_ID/GMAIL_CLIENT_SECRET.');
-  }
-
-  if (!token?.refresh_token) {
-    throw new Error('Missing Gmail refresh token. Add token.json or set GMAIL_REFRESH_TOKEN.');
-  }
-
-  const gmailUser = process.env.GMAIL_USER;
-  if (!gmailUser) {
-    throw new Error('Missing GMAIL_USER.');
+  if (!smtpHost || Number.isNaN(smtpPort) || !smtpUser || !smtpPass || !smtpFrom) {
+    throw new Error('Missing SMTP settings. Required: SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS, SMTP_FROM.');
   }
 
   const htmlBody = await readFile(path.join(__dirname, 'output.html'), 'utf8');
-  const to = process.env.TEST_RECIPIENT || gmailUser;
+  const to = process.env.TEST_RECIPIENT || smtpFrom;
   const subject = process.env.TEST_SUBJECT || 'Local Test: OrangeHRM 8.1';
 
-  const oauth2Client = new google.auth.OAuth2(
-    client.client_id,
-    client.client_secret,
-    process.env.GMAIL_REDIRECT_URI || 'https://developers.google.com/oauthplayground',
-  );
-
-  oauth2Client.setCredentials({ refresh_token: token.refresh_token });
-
-  const accessTokenResponse = await oauth2Client.getAccessToken();
-  const accessToken = typeof accessTokenResponse === 'string'
-    ? accessTokenResponse
-    : accessTokenResponse?.token;
-
-  if (!accessToken) {
-    throw new Error('Could not obtain Gmail access token.');
-  }
-
-  const rawMessage = [
-    `From: ${gmailUser}`,
-    `To: ${to}`,
-    `Subject: ${subject}`,
-    'MIME-Version: 1.0',
-    'Content-Type: text/html; charset="UTF-8"',
-    '',
-    htmlBody,
-  ].join('\r\n');
-
-  const gmail = google.gmail({ version: 'v1', auth: oauth2Client });
-
-  const result = await gmail.users.messages.send({
-    userId: 'me',
-    requestBody: {
-      raw: base64UrlEncode(rawMessage),
+  const transporter = nodemailer.createTransport({
+    host: smtpHost,
+    port: smtpPort,
+    secure: smtpSecure,
+    auth: {
+      user: smtpUser,
+      pass: smtpPass,
     },
   });
 
-  console.log(`SUCCESS: Email sent. ID: ${result.data.id}`);
+  const result = await transporter.sendMail({
+    from: smtpFrom,
+    to,
+    subject,
+    html: htmlBody,
+  });
+
+  console.log(`SUCCESS: Email sent. Message ID: ${result.messageId}`);
   console.log(`To: ${to}`);
 }
 
