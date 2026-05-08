@@ -9,11 +9,12 @@ services:
     environment:
       NODE_ENV: production
       PORT: 3000
-      GMAIL_CLIENT_ID: ${GMAIL_CLIENT_ID}
-      GMAIL_CLIENT_SECRET: ${GMAIL_CLIENT_SECRET}
-      GMAIL_REFRESH_TOKEN: ${GMAIL_REFRESH_TOKEN}
-      GMAIL_USER: ${GMAIL_USER}
-      GMAIL_REDIRECT_URI: ${GMAIL_REDIRECT_URI:-https://developers.google.com/oauthplayground}
+      SMTP_HOST: ${SMTP_HOST}
+      SMTP_PORT: ${SMTP_PORT}
+      SMTP_SECURE: ${SMTP_SECURE:-false}
+      SMTP_USER: ${SMTP_USER}
+      SMTP_PASS: ${SMTP_PASS}
+      SMTP_FROM: ${SMTP_FROM}
       MY_SECRET_KEY: ${MY_SECRET_KEY}
     restart: unless-stopped
     healthcheck:

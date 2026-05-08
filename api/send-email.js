@@ -1,4 +1,4 @@
-import { google } from 'googleapis';
+import nodemailer from 'nodemailer';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 
@@ -14,30 +14,29 @@ function getEnv(name) {
   return value;
 }
 
-function base64UrlEncode(value) {
-  return Buffer.from(value)
-    .toString('base64')
-    .replace(/\+/g, '-')
-    .replace(/\//g, '_')
-    .replace(/=+$/, '');
-}
-
-function chunkBase64(base64, size = 76) {
-  const chunks = [];
-  for (let i = 0; i < base64.length; i += size) {
-    chunks.push(base64.slice(i, i + size));
+function parseBoolean(value, fallback = false) {
+  if (typeof value !== 'string') {
+    return fallback;
   }
-  return chunks.join('\r\n');
+
+  const normalized = value.trim().toLowerCase();
+  if (['1', 'true', 'yes', 'on'].includes(normalized)) {
+    return true;
+  }
+  if (['0', 'false', 'no', 'off'].includes(normalized)) {
+    return false;
+  }
+
+  return fallback;
 }
 
-async function buildMimeMessage({ from, to, subject, htmlBody }) {
-  const boundary = `boundary_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+async function buildEmailPayload({ from, to, subject, htmlBody }) {
   const normalizedHtmlBody = htmlBody.replace(
     /src=(['"])\/orangehrm-logo\.png\1/gi,
     'src=$1cid:company-logo$1',
   );
   const useInlineLogo = normalizedHtmlBody.includes('cid:company-logo');
-  let logoBase64 = '';
+  let logoContent = null;
 
   if (useInlineLogo) {
     const candidatePaths = [
@@ -47,7 +46,7 @@ async function buildMimeMessage({ from, to, subject, htmlBody }) {
 
     for (const logoPath of candidatePaths) {
       try {
-        logoBase64 = await readFile(logoPath, 'base64');
+        logoContent = await readFile(logoPath);
         break;
       } catch {
         // Try next candidate path.
@@ -55,35 +54,24 @@ async function buildMimeMessage({ from, to, subject, htmlBody }) {
     }
   }
 
-  const parts = [
-    `From: ${from}`,
-    `To: ${to}`,
-    `Subject: ${subject}`,
-    'MIME-Version: 1.0',
-    `Content-Type: multipart/related; boundary="${boundary}"`,
-    '',
-    `--${boundary}`,
-    'Content-Type: text/html; charset="UTF-8"',
-    'Content-Transfer-Encoding: 7bit',
-    '',
-    normalizedHtmlBody,
-  ];
-
-  if (useInlineLogo && logoBase64) {
-    parts.push(
-      '',
-      `--${boundary}`,
-      'Content-Type: image/png; name="company-logo.png"',
-      'Content-Transfer-Encoding: base64',
-      'Content-ID: <company-logo>',
-      'Content-Disposition: inline; filename="company-logo.png"',
-      '',
-      chunkBase64(logoBase64),
-    );
+  const attachments = [];
+  if (useInlineLogo && logoContent) {
+    attachments.push({
+      filename: 'company-logo.png',
+      content: logoContent,
+      cid: 'company-logo',
+      contentType: 'image/png',
+      contentDisposition: 'inline',
+    });
   }
 
-  parts.push('', `--${boundary}--`);
-  return parts.join('\r\n');
+  return {
+    from,
+    to,
+    subject,
+    html: normalizedHtmlBody,
+    attachments,
+  };
 }
 
 export default async function handler(req, res) {
@@ -102,40 +90,31 @@ export default async function handler(req, res) {
   }
 
   try {
-    const clientId = getEnv('GMAIL_CLIENT_ID');
-    const clientSecret = getEnv('GMAIL_CLIENT_SECRET');
-    const refreshToken = getEnv('GMAIL_REFRESH_TOKEN');
-    const gmailUser = getEnv('GMAIL_USER');
-    const redirectUri = process.env.GMAIL_REDIRECT_URI || 'https://developers.google.com/oauthplayground';
+    const smtpHost = getEnv('SMTP_HOST');
+    const smtpPort = Number.parseInt(getEnv('SMTP_PORT'), 10);
+    const smtpSecure = parseBoolean(process.env.SMTP_SECURE, smtpPort === 465);
+    const smtpUser = getEnv('SMTP_USER');
+    const smtpPass = getEnv('SMTP_PASS');
+    const smtpFrom = getEnv('SMTP_FROM');
 
-    const oauth2Client = new google.auth.OAuth2(clientId, clientSecret, redirectUri);
-    oauth2Client.setCredentials({ refresh_token: refreshToken });
+    const transporter = nodemailer.createTransport({
+      host: smtpHost,
+      port: smtpPort,
+      secure: smtpSecure,
+      auth: {
+        user: smtpUser,
+        pass: smtpPass,
+      },
+    });
 
-    const accessTokenResponse = await oauth2Client.getAccessToken();
-    const accessToken =
-      typeof accessTokenResponse === 'string'
-        ? accessTokenResponse
-        : accessTokenResponse?.token;
-
-    if (!accessToken) {
-      throw new Error('Could not obtain Gmail access token');
-    }
-
-    const rawMessage = await buildMimeMessage({
-      from: gmailUser,
+    const message = await buildEmailPayload({
+      from: smtpFrom,
       to,
       subject,
       htmlBody,
     });
 
-    const gmail = google.gmail({ version: 'v1', auth: oauth2Client });
-
-    await gmail.users.messages.send({
-      userId: 'me',
-      requestBody: {
-        raw: base64UrlEncode(rawMessage),
-      },
-    });
+    await transporter.sendMail(message);
 
     return res.status(200).json({ success: true });
   } catch (error) {
