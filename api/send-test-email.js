@@ -31,38 +31,74 @@ function parseBoolean(value, fallback = false) {
 }
 
 async function buildEmailPayload({ from, to, subject, htmlBody }) {
-  const normalizedHtmlBody = htmlBody.replace(
-    /src=(['"])\/orangehrm-logo\.png\1/gi,
-    'src=$1cid:company-logo$1',
-  );
-  const useInlineLogo = normalizedHtmlBody.includes('cid:company-logo');
-  let logoContent = null;
-
-  if (useInlineLogo) {
-    const candidatePaths = [
-      path.join(process.cwd(), 'public', 'orangehrm-logo.png'),
-      path.join(process.cwd(), 'orangehrm-logo.png'),
-    ];
-
-    for (const logoPath of candidatePaths) {
-      try {
-        logoContent = await readFile(logoPath);
-        break;
-      } catch {
-        // Try next candidate path.
-      }
-    }
-  }
+  let normalizedHtmlBody = htmlBody;
 
   const attachments = [];
-  if (useInlineLogo && logoContent) {
-    attachments.push({
-      filename: 'company-logo.png',
-      content: logoContent,
-      cid: 'company-logo',
-      contentType: 'image/png',
-      contentDisposition: 'inline',
-    });
+
+  // Extract and replace base64 images
+  let imageIndex = 1;
+  normalizedHtmlBody = normalizedHtmlBody.replace(
+    /src=(['"])data:(image\/[^;]+);base64,([^'"]+)\1/gi,
+    (match, quote, mimeType, base64Data) => {
+      const cid = `inline-image-${imageIndex++}`;
+      const extension = mimeType.split('/')[1] || 'png';
+      
+      attachments.push({
+        filename: `${cid}.${extension}`,
+        content: Buffer.from(base64Data, 'base64'),
+        cid: cid,
+        contentType: mimeType,
+        contentDisposition: 'inline',
+      });
+      
+      return `src=${quote}cid:${cid}${quote}`;
+    }
+  );
+
+  // Extract and replace relative paths (like /icon_01.png or /orangehrm-logo.png)
+  const relativeImages = [];
+  normalizedHtmlBody = normalizedHtmlBody.replace(
+    /src=(['"])\/([^'"]+\.(png|jpg|jpeg|gif|svg))\1/gi,
+    (match, quote, filename) => {
+      const cid = `local-${filename.replace(/[^a-zA-Z0-9.-]/g, '')}`;
+      relativeImages.push({ filename, cid });
+      return `src=${quote}cid:${cid}${quote}`;
+    }
+  );
+
+  // Read each relative image and attach it
+  for (const img of relativeImages) {
+    if (attachments.some(a => a.cid === img.cid)) continue;
+
+    const candidatePaths = [
+      path.join(process.cwd(), 'public', img.filename),
+      path.join(process.cwd(), img.filename),
+    ];
+
+    let content = null;
+    for (const imgPath of candidatePaths) {
+      try {
+        content = await readFile(imgPath);
+        break;
+      } catch {
+        // Try next candidate path
+      }
+    }
+
+    if (content) {
+      const ext = img.filename.split('.').pop().toLowerCase();
+      let mimeType = `image/${ext}`;
+      if (ext === 'jpg') mimeType = 'image/jpeg';
+      if (ext === 'svg') mimeType = 'image/svg+xml';
+
+      attachments.push({
+        filename: img.filename,
+        content: content,
+        cid: img.cid,
+        contentType: mimeType,
+        contentDisposition: 'inline',
+      });
+    }
   }
 
   return {

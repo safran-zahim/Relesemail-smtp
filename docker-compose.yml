@@ -10,13 +10,13 @@ services:
       NODE_ENV: production
       PORT: 3000
       # Edit values here. No separate .env file is required.
-      SMTP_HOST: ""
-      SMTP_PORT: "587"
+      SMTP_HOST: "sandbox.smtp.mailtrap.io"
+      SMTP_PORT: "2525"
       SMTP_SECURE: "false"
-      SMTP_USER: ""
-      SMTP_PASS: ""
-      SMTP_FROM: ""
-      MY_SECRET_KEY: ""
+      SMTP_USER: "0dfff3125e9791"
+      SMTP_PASS: "08ffa688c94e78"
+      SMTP_FROM: "noreply@yourdomain.com"
+      MY_SECRET_KEY: "OrangeHRM_2026_Secure_Key_!@#"
     restart: unless-stopped
     healthcheck:
       test:
