@@ -1,0 +1,21 @@
+# dependencies
+node_modules
+npm-debug.log*
+
+# build outputs
+dist
+
+# env and local files
+.env
+.env.*
+
+# vcs/editor
+.git
+.gitignore
+.vscode
+
+# docs and misc
+README.md
+USER_MANUAL.md
+VERCEL_EMAIL_SETUP.md
+output.html
