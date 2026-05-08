@@ -1,10 +1,14 @@
 import nodemailer from 'nodemailer';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 export const config = {
   runtime: 'nodejs',
 };
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const projectRoot = path.resolve(__dirname, '..');
 
 function getEnv(name) {
   const value = process.env[name];
@@ -60,7 +64,8 @@ async function buildEmailPayload({ from, to, subject, htmlBody }) {
   normalizedHtmlBody = normalizedHtmlBody.replace(
     /src=(['"])\/([^'"]+\.(png|jpg|jpeg|gif|svg))\1/gi,
     (match, quote, filename) => {
-      const cid = `local-${filename.replace(/[^a-zA-Z0-9.-]/g, '')}`;
+      const sanitized = filename.replace(/\.[^.]+$/, '').replace(/[^a-zA-Z0-9-]/g, '-');
+      const cid = `local-${sanitized}`;
       relativeImages.push({ filename, cid });
       return `src=${quote}cid:${cid}${quote}`;
     }
@@ -71,14 +76,19 @@ async function buildEmailPayload({ from, to, subject, htmlBody }) {
     if (attachments.some(a => a.cid === img.cid)) continue;
 
     const candidatePaths = [
+      path.join(projectRoot, 'public', img.filename),
+      path.join(projectRoot, 'dist', img.filename),
+      path.join(projectRoot, img.filename),
       path.join(process.cwd(), 'public', img.filename),
       path.join(process.cwd(), img.filename),
     ];
 
     let content = null;
+    let resolvedPath = null;
     for (const imgPath of candidatePaths) {
       try {
         content = await readFile(imgPath);
+        resolvedPath = imgPath;
         break;
       } catch {
         // Try next candidate path
@@ -98,6 +108,9 @@ async function buildEmailPayload({ from, to, subject, htmlBody }) {
         contentType: mimeType,
         contentDisposition: 'inline',
       });
+      console.log(`[email] inline image attached: ${img.filename} from ${resolvedPath}`);
+    } else {
+      console.warn(`[email] inline image NOT FOUND: ${img.filename} (searched: ${candidatePaths.join(', ')})`);
     }
   }
 
